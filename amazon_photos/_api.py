@@ -44,7 +44,7 @@ logger = getLogger(list(Logger.manager.loggerDict)[-1])
 
 
 class AmazonPhotos:
-    def __init__(self, cookies: dict, db_path: str | Path = 'ap.parquet', tmp: str = '', **kwargs):
+    def __init__(self, cookies: dict, tmp: str = '', **kwargs):
         self.n_threads = psutil.cpu_count(logical=True)
         self.tld = self.determine_tld(cookies)
         self.drive_url = f'https://www.amazon.{self.tld}/drive/v1'
@@ -73,11 +73,7 @@ class AmazonPhotos:
         )
         self.tmp = Path(tmp)
         self.tmp.mkdir(parents=True, exist_ok=True)
-        self.db_path = Path(db_path).expanduser()
         self.root = self.get_root()
-        self.folders = self.get_folders()
-        self.db = self.load_db(**kwargs)
-        self.tree = self.build_tree()
 
     def determine_tld(self, cookies: dict) -> str:
         """
@@ -388,29 +384,16 @@ class AmazonPhotos:
         path = Path(path)
         folder_map, folders = self.create_folders(path)
 
-        if skip_dedup:
-            files = (x for x in path.rglob('*') if x.is_file())
-        elif md5s:
+        if not skip_dedup and md5s:
             files = self.dedup_files(path, md5s, max_workers)
         else:
-            if 'md5' in self.db.columns:
-                files = self.dedup_files(path, set(self.db.md5), max_workers)
-            else:
-                logger.warning('`md5` column missing from database, skipping deduplication checks.')
-                files = (x for x in path.rglob('*') if x.is_file())
+            files = (x for x in path.rglob('*') if x.is_file())
 
         relmap = folder_relmap(path.name, files, folder_map)
         fns = (partial(post, pid=pid, file=file) for pid, file in relmap)
 
         res = asyncio.run(self.process(fns, desc='Uploading files', **kwargs))
 
-        if refresh:
-            self.refresh_db()
-            ## todo: make sure tz correct, need to add multiple filters + pagination if upload is > MAX_NODES
-            # add some padding in case amazon disagrees with the timestamps
-            # ub_offset = 60 * 5
-            # lb_offset = 0
-            # self.refresh_db(filters=[f'createdDate:[{convert_ts(t0 - lb_offset)} TO {convert_ts(time.time() + ub_offset)}]'])
         return res
 
     def download(self, node_ids: list[str] | pd.Series, out: str = 'media', chunk_size: int = None, **kwargs) -> dict:
@@ -973,17 +956,16 @@ class AmazonPhotos:
         folders = asyncio.run(main([{'id': self.root['id']}]))
         return folders
 
-    def find_path(self, target: str, root: dict = None):
+    def find_path(self, target: str, root: dict):
         """
         Find path to node in tree
 
         @param target: path to node
-        @param root: optional root node to search from
+        @param root: root node to search from
         @return: node
         """
         if target == '':
-            return self.tree
-        root = root or self.tree
+            return root
         if root['name'] == '':
             current_path = root['name']
         else:
@@ -996,14 +978,14 @@ class AmazonPhotos:
                 return result
         return None
 
-    def build_tree(self, folders: list[dict] = None) -> dict:
+    def build_tree(self, folders: list[dict]) -> dict:
         """
         Build tree from folders
 
         @param folders: list of folders
         @return: tree
         """
-        folders = folders or self.folders
+        folders = folders
         folders.extend([{'id': self.root['id'], 'name': '', 'parents': [None]}])
         nodes = {item['id']: {'name': item['name'], 'id': item['id'], 'children': [], 'path': {}} for item in folders}
         root = None
@@ -1018,17 +1000,16 @@ class AmazonPhotos:
                 root['path'] = {root['name']: root['id']}
         return root
 
-    def print_tree(self, node: dict = None, show_id: bool = True, color: bool = True, indent: int = 4, prefix='', last=True):
+    def print_tree(self, node: dict, show_id: bool = True, color: bool = True, indent: int = 4, prefix='', last=True):
         """
         Visualize your Amazon Photos folder structure
 
-        @param node: optional root node to start from (default is root)
+        @param node: root node to start from
         @param show_id: optionally show node id in output
         @param color: optionally colorize output
         @param indent: optional indentation level
         @param prefix: optional prefix to add to output
         """
-        node = node or self.tree
         conn = ('└── ' if last else '├── ') if node['name'] else ''
         name = node['name'] or '~'
         print(f"{prefix}{conn}{Red if color else ''}{name}{Reset if color else ''} {node['id'] if show_id else ''}")
@@ -1124,72 +1105,6 @@ class AmazonPhotos:
 
         res = asyncio.run(main(Path(path)))
         return folder_map, res
-
-    def refresh_db_aggressive(self, **kwargs) -> pd.DataFrame:
-        now = datetime.now()
-        ap_yesterday = self.query(f'type:(PHOTOS OR VIDEOS) AND timeYear:({now.year}) AND timeMonth:({now.month}) AND timeDay:({now.day - 1})')
-        ap_today = self.query(f'type:(PHOTOS OR VIDEOS) AND timeYear:({now.year}) AND timeMonth:({now.month}) AND timeDay:({now.day})')
-        ap_tomorrow = self.query(f'type:(PHOTOS OR VIDEOS) AND timeYear:({now.year}) AND timeMonth:({now.month}) AND timeDay:({now.day + 1})')
-        cols = set(ap_yesterday.columns) | set(ap_today.columns) | set(ap_tomorrow.columns) | set(self.db.columns)
-
-        # disgusting
-        obj_dtype = np.dtypes.ObjectDType()
-        df = pd.concat([
-            ap_today.reindex(columns=cols).astype(obj_dtype),
-            ap_tomorrow.reindex(columns=cols).astype(obj_dtype),
-            self.db.reindex(columns=cols).astype(obj_dtype),
-        ]).drop_duplicates('id').reset_index(drop=True)
-
-        df = format_nodes(df)
-
-        df.to_parquet(self.db_path)
-        self.db = df
-        return df
-
-    def refresh_db(self, filters: list[str] = None, **kwargs) -> pd.DataFrame:
-        """
-        Refresh database
-        """
-        logger.info(f'Refreshing db `{self.db_path}`')
-        if filters is None:
-            db = self.refresh_db_aggressive(**kwargs)
-        else:
-            db = self.nodes(filters=filters, **kwargs)
-
-        cols = set(db.columns) | set(self.db.columns)
-
-        # disgusting
-        obj_dtype = np.dtypes.ObjectDType()
-        df = pd.concat([
-            db.reindex(columns=cols).astype(obj_dtype),
-            self.db.reindex(columns=cols).astype(obj_dtype),
-        ]).drop_duplicates('id').reset_index(drop=True)
-
-        df = format_nodes(df)
-
-        df.to_parquet(self.db_path)
-        self.db = df
-        return df
-
-    def load_db(self, **kwargs):
-        """
-        Load database
-
-        @param kwargs: optional kwargs to pass to pd.read_parquet
-        @return: DataFrame
-        """
-        df = None
-        if self.db_path.name and self.db_path.exists():
-            try:
-                df = format_nodes(pd.read_parquet(self.db_path, **kwargs))
-            except Exception as e:
-                logger.warning(f'Failed to load db `{self.db_path}`\t{e}')
-        else:
-            logger.warning(f'Database `{self.db_path}` not found, initializing new database')
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            df = format_nodes(self.query())
-            df.to_parquet(self.db_path)
-        return df
 
     def nodes(self, filters: list[str] = None, sort: list[str] = None, limit: int = MAX_LIMIT, offset: int = 0, **kwargs) -> pd.DataFrame | None:
         """
