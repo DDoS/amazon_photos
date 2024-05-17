@@ -39,12 +39,10 @@ if platform.system() != 'Windows':
     except:
         ...
 
-logging.config.dictConfig(LOG_CONFIG)
-logger = getLogger(list(Logger.manager.loggerDict)[-1])
-
 
 class AmazonPhotos:
-    def __init__(self, cookies: dict, tmp: str = '', **kwargs):
+    def __init__(self, cookies: dict, tmp: str = '', logger: Logger = None, **kwargs):
+        self.logger = logger if logger else logging.getLogger('')
         self.n_threads = psutil.cpu_count(logical=True)
         self.tld = self.determine_tld(cookies)
         self.drive_url = f'https://www.amazon.{self.tld}/drive/v1'
@@ -140,12 +138,12 @@ class AmazonPhotos:
                     r = await fn(*args, **kwargs)
 
                     if r.status_code == 409:  # conflict
-                        logger.debug(f'{r.status_code} {r.text}')
+                        self.logger.debug(f'{r.status_code} {r.text}')
                         return r
 
                     if r.status_code == 401:  # BadAuthenticationData
-                        logger.error(f'{r.status_code} {r.text}')
-                        logger.error(f'Cookies expired. Log in to Amazon Photos and copy fresh cookies.')
+                        self.logger.error(f'{r.status_code} {r.text}')
+                        self.logger.error(f'Cookies expired. Log in to Amazon Photos and copy fresh cookies.')
                         # sys.exit(1)
 
                     r.raise_for_status()
@@ -156,10 +154,10 @@ class AmazonPhotos:
                     return r
             except Exception as e:
                 if i == max_retries:
-                    logger.debug(f'Max retries exceeded\n{e}')
+                    self.logger.debug(f'Max retries exceeded\n{e}')
                     return
                 t = min(random.random() * (b ** i), m)
-                logger.debug(f'Retrying in {f"{t:.2f}"} seconds\t\t{e}')
+                self.logger.debug(f'Retrying in {f"{t:.2f}"} seconds\t\t{e}')
                 await asyncio.sleep(t)
 
     def backoff(self, fn, *args, m: int = 20, b: int = 2, max_retries: int = 12, **kwargs) -> any:
@@ -169,20 +167,20 @@ class AmazonPhotos:
                 r = fn(*args, **kwargs)
 
                 if r.status_code == 409:  # conflict
-                    logger.debug(f'{r.status_code} {r.text}')
+                    self.logger.debug(f'{r.status_code} {r.text}')
                     return r
 
                 if r.status_code == 400:  # malformed query
                     if r.json().get('message').startswith('Invalid filter:'):
-                        logger.error(f'{r.status_code} {r.text}\t\tSee readme for query language syntax.')
+                        self.logger.error(f'{r.status_code} {r.text}\t\tSee readme for query language syntax.')
                         return
                     else:
-                        logger.error(f'{r.status_code} {r.text}')
+                        self.logger.error(f'{r.status_code} {r.text}')
                         # sys.exit(1)
 
                 if r.status_code == 401:  # "BadAuthenticationData"
-                    logger.error(f'{r.status_code} {r.text}')
-                    logger.error(f'Cookies expired. Log in to Amazon Photos and copy fresh cookies.')
+                    self.logger.error(f'{r.status_code} {r.text}')
+                    self.logger.error(f'Cookies expired. Log in to Amazon Photos and copy fresh cookies.')
                     # sys.exit(1) ## testing
 
                 r.raise_for_status()
@@ -193,10 +191,10 @@ class AmazonPhotos:
                 return r
             except Exception as e:
                 if i == max_retries:
-                    logger.debug(f'Max retries exceeded\n{e}')
+                    self.logger.debug(f'Max retries exceeded\n{e}')
                     return
                 t = min(random.random() * (b ** i), m)
-                logger.debug(f'Retrying in {f"{t:.2f}"} seconds\t\t{e}')
+                self.logger.debug(f'Retrying in {f"{t:.2f}"} seconds\t\t{e}')
                 time.sleep(t)
 
     def usage(self) -> dict | pd.DataFrame:
@@ -315,8 +313,8 @@ class AmazonPhotos:
                     else:
                         dups.append(file)
                     pbar.update()
-        logger.info(f'{len(dups)} Duplicate files found')
-        logger.info(f'{len(unique)} Unique files found')
+        self.logger.info(f'{len(dups)} Duplicate files found')
+        self.logger.info(f'{len(unique)} Unique files found')
         return unique
 
     def upload(self, path: str | Path, md5s: set[str] = None, refresh: bool = True, chunk_size=64 * 1024, **kwargs) -> list[dict]:
@@ -355,29 +353,29 @@ class AmazonPhotos:
                         )
 
                         if r.status_code == 409:  # conflict
-                            logger.debug(f'{r.status_code} {r.text}')
+                            self.logger.debug(f'{r.status_code} {r.text}')
                             return r
 
                         if r.status_code == 400:
                             if r.json().get('message').startswith('Invalid filter:'):
-                                logger.error(f'{r.status_code} {r.text}\t\tSee readme for query language syntax.')
+                                self.logger.error(f'{r.status_code} {r.text}\t\tSee readme for query language syntax.')
                                 return
                             else:
-                                logger.error(f'{r.status_code} {r.text}')
+                                self.logger.error(f'{r.status_code} {r.text}')
                                 # sys.exit(1)
 
                         if r.status_code == 401:  # BadAuthenticationData
-                            logger.error(f'{r.status_code} {r.text}')
-                            logger.error(f'Cookies expired. Log in to Amazon Photos and copy fresh cookies.')
+                            self.logger.error(f'{r.status_code} {r.text}')
+                            self.logger.error(f'Cookies expired. Log in to Amazon Photos and copy fresh cookies.')
                             # sys.exit(1)
                         r.raise_for_status()
                         return r
                 except Exception as e:
                     if i == max_retries:
-                        logger.debug(f'Max retries exceeded\n{e}')
+                        self.logger.debug(f'Max retries exceeded\n{e}')
                         return
                     t = min(random.random() * (b ** i), m)
-                    logger.debug(f'Retrying in {f"{t:.2f}"} seconds\t\t{e}')
+                    self.logger.debug(f'Retrying in {f"{t:.2f}"} seconds\t\t{e}')
                     await asyncio.sleep(t)
 
         # t0 = time.time()
@@ -418,7 +416,7 @@ class AmazonPhotos:
         }
 
         async def get(client: AsyncClient, sem: asyncio.Semaphore, node: str) -> None:
-            logger.debug(f'Downloading {node}')
+            self.logger.debug(f'Downloading {node}')
             try:
                 async with sem:
                     url = f'{self.drive_url}/nodes/{node}/contentRedirection'
@@ -429,7 +427,7 @@ class AmazonPhotos:
                             async for chunk in r.aiter_bytes(chunk_size):
                                 await fp.write(chunk)
             except Exception as e:
-                logger.debug(f'Download FAILED for {node}\t{e}')
+                self.logger.debug(f'Download FAILED for {node}\t{e}')
 
         fns = (partial(get, node=node) for node in node_ids)
         asyncio.run(self.process(fns, desc='Downloading media', **kwargs))
@@ -906,7 +904,7 @@ class AmazonPhotos:
         """
         r = self.backoff(self.client.get, f'{self.drive_url}/nodes', params={'filters': 'isRoot:true'} | self.base_params)
         root = r.json()['data'][0]
-        logger.debug(f'Got root node: {root}')
+        self.logger.debug(f'Got root node: {root}')
         return root
 
     def get_folders(self) -> list[dict]:
@@ -1053,9 +1051,9 @@ class AmazonPhotos:
                     },
                 )
                 if r.status_code < 300:
-                    logger.debug(f'Folder created: {path.name}\t{r.status_code} {r.text}')
+                    self.logger.debug(f'Folder created: {path.name}\t{r.status_code} {r.text}')
                 else:
-                    logger.debug(f'Folder creation failed: {path.name}\t{r.status_code} {r.text}')
+                    self.logger.debug(f'Folder creation failed: {path.name}\t{r.status_code} {r.text}')
                 folder_data = r.json()
                 if get_id(folder_data):
                     return folder_data
@@ -1086,9 +1084,9 @@ class AmazonPhotos:
             # check if local folder name exists in Amazon Photos root
             root_folder = self.find_path(root.name)
             if not root_folder:
-                logger.debug(f'Root folder not found, creating root folder: {root.name}')
+                self.logger.debug(f'Root folder not found, creating root folder: {root.name}')
                 root_folder = await mkdir(sem, self.root['id'], root)
-                logger.debug(f'Created root folder: {root_folder = }')
+                self.logger.debug(f'Created root folder: {root_folder = }')
 
             parent_id = get_id(root_folder)
             folder_map[root_folder['name']] = parent_id
@@ -1133,7 +1131,7 @@ class AmazonPhotos:
         if initial['count'] <= MAX_LIMIT:
             if not (df := pd.json_normalize(initial['data'])).empty:
                 return format_nodes(df)
-            logger.info(f'No results found for {filters = }')
+            self.logger.info(f'No results found for {filters = }')
             return
 
         res = [initial]
