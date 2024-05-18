@@ -41,7 +41,7 @@ if platform.system() != 'Windows':
 
 
 class AmazonPhotos:
-    def __init__(self, cookies: dict, tmp: str = '', logger: Logger = None, **kwargs):
+    def __init__(self, cookies: dict, user_agent: str = None, tmp: str = '', logger: Logger = None, **kwargs):
         self.logger = logger if logger else logging.getLogger('')
         self.n_threads = psutil.cpu_count(logical=True)
         self.tld = self.determine_tld(cookies)
@@ -64,7 +64,7 @@ class AmazonPhotos:
             follow_redirects=True,
             timeout=60,
             headers={
-                'user-agent': random.choice(USER_AGENTS),
+                'user-agent': user_agent if user_agent is not None else random.choice(USER_AGENTS),
                 'x-amzn-sessionid': cookies['session-id'],
             },
             cookies=cookies
